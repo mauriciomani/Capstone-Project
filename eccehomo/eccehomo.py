@@ -12,6 +12,7 @@ from sklearn.ensemble import RandomForestClassifier, GradientBoostingClassifier
 from sklearn.model_selection import cross_val_score, GridSearchCV
 from sklearn.svm import SVC
 from sklearn.linear_model import LogisticRegression
+from sklearn.impute import KNNImputer
 import pdb
 
 np.random.seed(12)
@@ -93,7 +94,7 @@ class EDA():
         if to_print:
             print(self.df.describe())
         self.html += "<h2>Summary Statistics</h2>The notebook has " + str(self.df.shape[0]) + " observations and " + str(self.df.shape[1]) + " columns. Having the following names: " + ', '.join(self.df.columns) + ".<br>"
-        self.html += self.df.describe().to_html(buf = None, index = False)
+        self.html += self.df.describe().to_html(buf = None, index = True)
     
     def unique_values(self, unique_size = 20):
         """"
@@ -103,11 +104,17 @@ class EDA():
         unique_size = int
             Maximum amount of unique values a variable must have (default is 20)
         """
+        last_size = 0
         unique_values = {}
         if len(self.strings) > 0:
             for variable in self.df[self.strings]:
                 unique_value = self.df[variable].unique()
                 if len(unique_value) <= unique_size:
+                    if (len(unique_value) > last_size):
+                        last_size = len(unique_value)
+                    else:
+                        missing = last_size - len(unique_value)
+                        unique_value = np.append(unique_value, ([None] * missing))
                     unique_values[variable] = unique_value
                     self.unique.append(variable)
         if len(unique_values) == 0  & len(self.strings) > 0:
@@ -116,7 +123,7 @@ class EDA():
         elif len(self.strings) == 0:
             #use warnings
             print("Function called but no categorical variabls (objects) to analyse for uniqueness")
-        else:       
+        else:     
             self.html += "<h2>Unique variables</h2>"
             self.html += pd.DataFrame(unique_values).to_html(buf = None, index = False, na_rep = "")
         
@@ -188,10 +195,10 @@ class EDA():
         counter = 1
         for name in floats:
             if y_compare:
-                sns_figure = sns.distplot(class0[name], kde = False, color="orange", label = 'class0', norm_hist = True)
-                sns_figure = sns.distplot(class1[name], kde = False, color="blue", label = 'class1', norm_hist = True)
+                sns_figure = sns.distplot(class0[name].dropna(), kde = False, color="orange", label = 'class0', norm_hist = True)
+                sns_figure = sns.distplot(class1[name].dropna(), kde = False, color="blue", label = 'class1', norm_hist = True)
             else:
-                sns_figure = sns.distplot(self.df[name], kde = False, color="orange")
+                sns_figure = sns.distplot(self.df[name].dropna(), kde = False, color="orange")
             sns_figure.set_title("Histogram of " + name)
             plt.legend()
             figure = sns_figure.get_figure()
@@ -308,7 +315,8 @@ class EDA():
 
 class DataImputation():
     """
-    A class to perform data imputation using different methods, such as zero, median, mode, random, KNN, clustering and deleting.
+    A class to perform data imputation using different methods, such as zero, median, mode, random, KNN and deleting.
+    Should be used without target variable, for train and test separetly.
 
     ...
 
@@ -316,25 +324,39 @@ class DataImputation():
     ----------
     df : pandas.DataFrame
         A pandas DataFrame with a binomial variable of interest
-    y_name : str
-        Name of the binomial variable that might be predicted
+    id_name : str
+        Name of id variable, if None use False
     
     Methods
     -------
     describe(to_print=False)
         Print summary statistics such as max, min, median, first and third quartile, count and mean of all numeric variables.
     """
-    def __init__(self, df, y_name):
+    def __init__(self, df_train, df_test, y = None, id_name = None):
         #if taget variable has null values, there is no clear way to impute. Delete the observation.
-        self.df = df.dropna(axis = 0, how ='any', subset=[y_name])
-        self.y_name = y_name
+        #evrything related with y_name shouldbe deted
+        self.df_train = df_train
+        self.df_test = df_test
+        if id_name is None:
+            self.id = self.df_train.iloc[:,0]
+            self.df_train = self.df_train.iloc[:,1:]
+            self.df_test = self.df_test.iloc[:,1:]
+        else:
+            self.id = self.df_train[id_name]
+            self.df_train = self.df_train.drop(id_name, axis = 1)
+            self.df_test = self.df_test.drop(id_name, axis = 1)
+        self.numeric = list(self.df_train.dtypes[self.df_train.dtypes != "object"].index)
+        self.strings = list(self.df_train.dtypes[self.df_train.dtypes == "object"].index)
         self.imputed_values = {}
+        self.knn = None
     
-    def delete_observations(self):
-        pass
+    @staticmethod
+    def delete_observations(df, variables, how = 'any'):
+        return(df.dropna(axis = 0, subset = [variables], how = how))
 
+    @staticmethod
     def easy_imputation(df, variable, method = 'median'):
-         """
+        """
         Imputes data according to method specified: zero, max, min, mean, median, mode.
         
         Parameters
@@ -351,43 +373,99 @@ class DataImputation():
         df: pandas DataFrame
             DataFrame with null imputed values on variable
         """
-        #vector = df[variable]
+        vector = df[variable]
+        value = None
         #consider adding bfill and ffill for ordered data
-        # if method = 'zero':
-        # df[variable] = df[variable].fillna(0, axis = 0)
-        # elif method = 'max':
-        # df[variable] = df[variable].fillna(vector.max(), axis = 0)
-        #elif method = 'min':
-        #    df[variable] = df[variable].fillna(vector.min(), axis = 0)
-        #elif method = 'mean':
-        #    df[variable] = df[variable].fillna(vector.mean(), axis = 0)
-        #elif method = 'median':
-        #    df[variable] = df[variable].fillna(vector.median(), axis = 0)
-        #elif method = 'mode':
-        #    df[variable] = df[variable].fillna(vector.mode(), axis = 0)
-        #return(df)
+        if method == 'zero':
+            df[variable] = df[variable].fillna(0, axis = 0)
+            value = 0
+        elif method == 'max':
+            df[variable] = df[variable].fillna(vector.max(), axis = 0)
+            value = vector.max()
+        elif method == 'min':
+            df[variable] = df[variable].fillna(vector.min(), axis = 0)
+            value = vector.min()
+        elif method == 'mean':
+            df[variable] = df[variable].fillna(vector.mean(), axis = 0)
+            value = vector.mean()
+        elif method == 'median':
+            df[variable] = df[variable].fillna(vector.median(), axis = 0)
+            value = vector.median()
+        elif method == 'mode':
+            df[variable] = df[variable].fillna(vector.mode(), axis = 0)
+            value = vector.mode()
+        return(df, value)
 
-    def cluster_imputation(df, variable, algo, sample = 30):
-        null_values = df[~df.isnull()]
-        if df.shape[0] == 0:
-            print("Please choose other method. All observations have at least one null value.")
-        #else:
-            #if algo == 'kmean':
-                #perform min max
-                #KMeans()
-                #KMeans()
-            #elif algo == 'gmm':
-            #    pass
+    #Think how to implement cluster
+    #def cluster_imputation(df, variable, algo, sample = 30):
+        #null_values = df[~df.isnull()]
+        #if df.shape[0] == 0:
+        #    print("Please choose other method. All observations have at least one null value.")
 
+    @staticmethod
+    def KNN_imputation(df, n):
+        imputer = KNNImputer(n_neighbors = n).fit(df)
+        return(imputer)
 
-    def KNN_imputation(self):
-        pass
+    @staticmethod
+    def missing_indicator(df, variable, indicator):
+        df[variable] = df[variable].fillna(indicator)
+        return(df)
 
-    def user_defined(self, defined_methods = None):
-        if defined_methods is not None:
-            for variables, method in defined_methods.items():
-                pass
-        pass
+    def user_defined(self, defined_methods = None, indicator = "other",knn = 5):
+        """
+        Pass a dictionary with actions and will be performed, class will store a dictionary 
+        Parameters
+        ----------
+        defined_methods : Dict
+            Dictionary type of form {"variable":"method"}
+        indicator : str or int or float
+            For method indicator of missing (default is "other")
+        knn : int
+            For KNN imputation (default is 5)"""
+        #add automatic imputer
+        for variable, method in defined_methods.items():
+            if method in ['zero', 'max', 'min', 'median', 'mode']:
+                self.df_train, value = self.easy_imputation(self.df_train, variable, method)
+                if method == "mode":
+                    self.imputed_values[variable] = [method,value[0]]
+                else:
+                    self.imputed_values[variable] = [method,value]
+            elif method == 'delete':
+                self.df_train = self.delete_observations(self.df_train, variable)
+                self.imputed_values[variable] = ['delete', 'delete']
+            elif method == 'indicator':
+                self.df_train = self.missing_indicator(self.df_train, variable, indicator=indicator)
+                self.imputed_values[variable] = ['indicator', indicator]
+            else:
+                estimator = self.KNN_imputation(self.df_train[self.numeric], knn)
+                self.df_train = self.df_train[self.strings].reset_index(drop=True).join(pd.DataFrame(estimator.transform(self.df_train[self.numeric]), columns=self.numeric))
+                self.imputed_values[variable] = ["knn", estimator]
+                self.knn = estimator
+        self.df_train = self.df_train.reset_index(drop=True).join(self.id.reset_index(drop=True))
+        return(self.df_train)
+
+    def test_imputation(self, train_defined, use_value = True):
+        """
+        Pass a dictionary with train actions to impute on test dataset 
+        Parameters
+        ----------
+        defined_methods : Dict
+            Dictionary type of form {"variable":"method"}
+        indicator : str or int or float
+            For method indicator of missing (default is "other")
+        knn : int
+            For KNN imputation (default is 5)"""
+        if use_value:
+            for variable, info in train_defined.items():
+                if info[0] in ['zero', 'max', 'min', 'median', 'mode', 'indicator']:
+                    self.df_test[variable] = self.df_test[variable].fillna(info[1])
+                elif info[0] == 'delete':
+                    pass
+                else:
+                    self.df_test = self.df_test[self.strings].reset_index(drop=True).join(pd.DataFrame(self.knn.transform(self.df_test[self.numeric]), columns=self.numeric))
+        self.df_test = self.df_test.reset_index(drop=True).join(self.id.reset_index(drop=True))
+        return(self.df_test)
 
 class Outlier:
     """
@@ -413,7 +491,8 @@ class Outlier:
     discretization(variable, bin = 3)
         Discretize a particular variable, aiming to avoid outliers by grouping data on a particular variable.
     """
-    def __init__(self, df, y_name):
+    def __init__(self, df):
+        #remove y_name since you should just add to X_train
         """
         Parameters
         ----------
@@ -424,7 +503,7 @@ class Outlier:
         """
         self.df = df
         #make sure you input correct name
-        self.y_name = y_name
+        #self.y_name = y_name
         self.numeric = list(self.df.dtypes[self.df.dtypes != "object"].index)
     
     def tukey(self, max_outliers = 5):
@@ -440,7 +519,7 @@ class Outlier:
         ---------
         df: pandas DataFrame
             DataFrame without outliers"""
-        X_columns = [name for name in self.numeric if name != self.y_name]
+        #X_columns = [name for name in self.numeric if name != self.y_name]
         boolean_dict = {}
         for name in X_columns:
             q1 = self.df[name].quantile(0.25)
@@ -449,8 +528,8 @@ class Outlier:
             boolean = (self.df[name] < q1 - 1.5 * iqr) | (self.df[name] > q3 + 1.5 * iqr)
             boolean_dict[name] = boolean
         dataframe = pd.DataFrame(boolean_dict).sum(axis = 1) 
-        opt_threshold = len(X_columns) - 1
-        for threshold in reversed(range(1, len(X_columns))):
+        opt_threshold = len(self.numeric) - 1
+        for threshold in reversed(range(1, len(self.numeric))):
             print(threshold)
             if dataframe[dataframe > threshold].count() > max_outliers:
                 break
@@ -476,10 +555,10 @@ class Outlier:
         ---------
         df: pandas DataFrame
             DataFrame without outliers"""
-        X_columns = [name for name in self.numeric if name != self.y_name]
+        #X_columns = [name for name in self.numeric if name != self.y_name]
         isoforest = None
-        for num_columns in reversed(range(1, len(X_columns))):
-            isoforest = IsolationForest(n_jobs = -1, random_state = 12, max_features = num_columns).fit_predict(self.df[X_columns])
+        for num_columns in reversed(range(1, len(self.numeric))):
+            isoforest = IsolationForest(n_jobs = -1, random_state = 12, max_features = num_columns).fit_predict(self.df[self.numeric])
             if np.unique(isoforest, return_counts=True)[1][0] < max_outliers:
                 break
         if len(np.where(isoforest == 1)[0]) == self.df.shape[0]:
@@ -654,7 +733,7 @@ class Modeling():
 
     def optimize(self):
         """
-        Performs bayesian optimization
+        Performs bayesian optimization. For more information visit: https://www.kdnuggets.com/2019/07/xgboost-random-forest-bayesian-optimisation.html 
         
         Parameters
         ----------
@@ -754,9 +833,9 @@ class Modeling():
                 random_state=12).fit(self.X, self.y_val))
         elif self.algo == "LogisticRegression":
             lr = LogisticRegression(n_jobs = -1, random_state = 12)
-            parameters = {"C":[0.05, 0.1, 0.15, 0.2, 0.25, 0.3, 0.35, 0.4, 0.45, 0.5, 0.55, 0.6, 0.65, 0.7, 0.75, 0.8, 0.85, 0.9, 0.95, 1],
+            parameters = {"C":[0.05, 0.1, 0.15, 0.2, 0.25, 0.3, 0.4, 0.5, 0.6, 0.7, 0.75, 0.8, 0.85, 0.9, 0.95, 1],
             "fit_intercept":[True, False]}
-            grid_lr = GridSearchCV(lr, param_grid = parameter, scoring = self.scoring, n_jobs = -1).fit(self.X, self.y_val)
+            grid_lr = GridSearchCV(lr, param_grid = parameters, scoring = self.scoring, n_jobs = -1).fit(self.X, self.y_val)
             return(grid_lr.best_estimator_)
         else:
             print("No valid algorithm")
