@@ -1,0 +1,59 @@
+#!/usr/bin/env python
+
+import os
+import json
+import pickle
+import sys
+import traceback
+
+import pandas as pd
+
+from sklearn.svm import SVC
+
+prefix = "/opt/ml/"
+
+input_path = prefix + "input/data"
+output_path = os.path.join(prefix, "output")
+model_path = os.path.join(prefix, "model")
+param_path = os.path.join(prefix, "input/config/hyperparameters.json")
+
+channel_name = "training"
+training_path = os.path.join(input_path, channel_name)
+
+def train():
+    print("The train has started. This message means train function is running")
+    try:
+        with open(param_path, "r") as tc:
+            trainingParams = json.load(tc)
+        input_files = [ os.path.join(training_path, file) for file in os.listdir(training_path) ]
+        if len(input_files) == 0:
+            raise ValueError(('There are no files in {}. /n This usually indicates that the channel ({}) was incorrectly specified, the data specification in S3 was incorrectly specified or the role specified does not have permission to access the data.').format(training_path, channel_name))
+        #if expecting to reuse this, change names or place Ys first for example
+        
+        train_data = pd.read_csv(input_files[0])
+        X = train_data.drop("DEATH_EVENT", axis = 1)
+        y = train_data["DEATH_EVENT"]
+
+        C = trainingParams.get("C", 1.0)
+        if C is not 1.0:
+            C = float(C)
+        
+        #train support vector machine
+        svm = SVC(C = C)
+        svm = svm.fit(X, y)
+
+        with open(os.path.join(model_path, "svm-model.pkl"), "w") as out:
+            pickle.dump(svm, out)
+        print("Training has been completed.")
+    
+    except Exception as e:
+        trc = traceback.format_exc()
+        with open(os.path.join(output_path, "failure"), "w") as s:
+            s.write("Exception during training: " + str(e) + "\n" + trc)
+        print("Exception during training: " + str(e) + "\n" + trc)
+        sys.exit(255)
+    
+if __name__ == "__main__":
+    train()
+    sys.exit(0)
+    
