@@ -1,5 +1,5 @@
 # Ecce Homo
-Ecce Homo aims to be an automatic tool to implement machine learning workflow tasks. To see an example please visit [eccehomo](https://github.com/mauriciomani/Capstone-Project/tree/master/eccehomo) folder where you will find a IPython Notebbok with implementation on titanic dataset.
+Ecce Homo aims to be an automatic tool to implement machine learning workflow tasks, often call as AutoML. To see an example please visit [eccehomo](https://github.com/mauriciomani/Capstone-Project/tree/master/eccehomo) folder where you will find a IPython Notebbok with implementation on titanic dataset.
 This is part of the Final Capstone project on the Machine learning engineer nanodegree. For more information please visit [Udacity](https://www.udacity.com/course/machine-learning-engineer-nanodegree--nd009t).
 Or visit either [proposal.pdf](https://github.com/mauriciomani/Capstone-Project/blob/master/proposal.pdf) or [project_report.pdf](https://github.com/mauriciomani/Capstone-Project/blob/master/project_report.pdf).
 ## Why Ecce Homo?
@@ -51,3 +51,10 @@ Datasets can be found in eccehomo/name/data folder or in the following Kaggle li
 
 ## License
 This project is built under the MIT license, for more information visit [here](https://github.com/mauriciomani/Capstone-Project/blob/master/LICENSE.txt).
+
+## What is missing?
+* Unit tests to workflow
+* Improve data imputation and model hyperparameter tunning.
+* Work on Balancing dataset module
+* Model Evaluation
+* Unit tests to repo and library.
